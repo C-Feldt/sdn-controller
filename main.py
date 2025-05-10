@@ -3,6 +3,34 @@ import argparse
 import heapq
 import sys
 
+# GLOBALS
+topo = None
+flows = []
+_next_flow_id = 0
+
+
+# Flow Data Structure
+class Flow:
+	"""Represents a flow in the network"""
+	def __init__(self, flow_id, src, dst, traffic_type, path):
+		self.id = flow_id
+		self.src = src
+		self.dst = dst
+		self.type = traffic_type
+		self.path = path
+
+	def table_entries(self):
+		"""Generate flow table entries"""
+		entries = []
+		for i in range(len(self.path) - 1):
+			node = self.path[i]
+			out_port = self.path[i + 1]
+			match = f"src={self.src}, dst={self.dst}, type={self.type}"
+			entries.append((node, match, out_port))
+		return entries
+
+
+# Topology Class
 class Topology:
 	"""Graph with weighted edges and Dijkstra's shortest path"""
 	def __init__(self):
@@ -30,7 +58,7 @@ class Topology:
 			self.adj[v].pop(u, None)
 
 	def nodes(self):
-		return self.adj.keys()
+		return list(self.adj.keys())
 	
 	def links(self):
 		seen = set()
@@ -94,11 +122,18 @@ def remove_link(args):
 	print(f'Removing link: {args.node1} <-> {args.node2}')
 
 def inject_flow(args):
+	global _next_flow_id
 	path = topo.shortest_path(args.src, args.dst)
-	if path:
-		print(f'Injecting flow {args.src} -> {args.dst} on path: {path}')
-	else:
+	if not path:
 		print(f'No path found from {args.src} to {args.dst}')
+		return
+	flow_id = _next_flow_id
+	_next_flow_id += 1
+	flow = Flow(flow_id, args.src, args.dst, args.type, path)
+	flows.append(flow)
+	print(f'Injecting flow {flow_id}: {flow.src} -> {flow.dst} on path {flow.path}')
+	for switch, match, out_port in flow.table_entries():
+		print(f'  Switch {switch}: match [{match}] -> out_port={out_port}')
 
 def fail_link(args):
 	topo.remove_link(args.node1, args.node2)
@@ -127,7 +162,7 @@ def repl(parser):
 		if not line.strip():
 			continue
 		if line.strip().lower() in ('exit', 'quit'):
-			print('Exiting shell')
+			print('Exiting shell.')
 			break
 		parts = line.split()
 		try:
@@ -139,7 +174,11 @@ def repl(parser):
 		except SystemExit:
 			pass
 
+
 def main():
+	global topo
+	topo = Topology()
+
 	parser = argparse.ArgumentParser(description='SDN Controller CLI')
 	subparsers = parser.add_subparsers(dest='command')
 

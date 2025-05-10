@@ -11,3 +11,7 @@ I've created the CLI interface first and foremost. I waited til the due date to 
 ### Push 2
 
 Okay, so I was just going down the list in the directions doc: adding topology graph management. Using Djikstra's because I learned it three years ago and only partly forgot about it. I've added what I think should be the majority of what's needed for a full Topology graph. HOWEVER, I realized that I'm not tracking any state right now. I need to either store in a file or open a shell session. Shell seems cooler and I already know how to do that with ease, so that's what I went with. So far, it appears to work very well! I'm happy with the way it looks and feels. I'm just going to hope this still aligns with his 'simple CLI' requirement.
+
+### Push 3
+
+Flow model time! I added a model to create flows from node `src` to node `dst`. It computes the path and generates a table for each switch. Also added explicit globals. Not much else to say other than I hope this is what's expected in the tables.
