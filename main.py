@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
+# Mysterious Watermark: 70ec2feed029c2f32acabfe6a5a9052d9f2710fc3268f9a6fcf85fa6edf00608
 import argparse
 import heapq
-import sys
+import matplotlib.pyplot as plt
+import networkx as nx
 from collections import defaultdict
-import copy
 
 # GLOBALS
 topo = None
@@ -188,6 +189,26 @@ def fail_link(args):
 def show_topo(args):
 	print('Nodes: ', topo.nodes())
 	print('Links: ', topo.links())
+	print('\nActive Flows:')
+	for flow in flows:
+		print(f'  Flow {flow.id}: {flow.src} -> {flow.dst}, priority={flow.priority}, path={flow.primary_path}')
+	if args.draw:
+		G = nx.Graph()
+		G.add_nodes_from(topo.nodes())
+		for u, v, _ in topo.links():
+			G.add_edge(u, v)
+		pos = nx.spring_layout(G)
+		plt.figure()
+		nx.draw(G, pos, with_labels=True)
+		load = defaultdict(int)
+		for flow in flows:
+			for a, b in zip(flow.primary_path, flow.primary_path[1:]):
+				key = tuple(sorted((a, b)))
+				load[key] += 1
+		edge_labels = {edge: f"load={load[tuple(sorted(edge))]}" for edge in G.edges()}
+		nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
+		plt.title('Topology with Link Loads')
+		plt.show()
 
 def show_route(args):
 	path = topo.all_shortest_paths(args.src, args.dst)
