@@ -15,3 +15,7 @@ Okay, so I was just going down the list in the directions doc: adding topology g
 ### Push 3
 
 Flow model time! I added a model to create flows from node `src` to node `dst`. It computes the path and generates a table for each switch. Also added explicit globals. Not much else to say other than I hope this is what's expected in the tables.
+
+### Push 4
+
+This was the first big "ah, i bunged that", as I had to separate the Djikstra's algorithm so I could create a function to calculate multiple paths simultaneously so I can implement load-balancing. I technically could have used what I had, but that would have led to even harder to understand code and I'm very anti-comments unless necessary, so I made a business decision. However, now we have load-balancing using a round-robin style algorithm! Additionally, I added in backup paths, another reason I had to redo my shortest path algorithm. Now we get a list of paths and either share the load on multiple or use backups if needed. This sucked btw, as I initially couldn't figure out getting the new path without "ignoring" the old path. Took some wracking to finally realize I can just remove the main path temporarily and add in the new path. That's why you'll see so much commenting in this push. This is probably where I'll talk about a specific hardship I encountered in my code; I mixed up a `path` and `paths` variables I was using and ended up overwriting paths in some places and not setting them in others.

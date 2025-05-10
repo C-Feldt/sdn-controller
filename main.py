@@ -2,31 +2,37 @@
 import argparse
 import heapq
 import sys
+from collections import defaultdict
+import copy
 
 # GLOBALS
 topo = None
 flows = []
-_next_flow_id = 0
+_next_flow_id = 1
+_rr_counters = defaultdict(int)
 
 
 # Flow Data Structure
 class Flow:
 	"""Represents a flow in the network"""
-	def __init__(self, flow_id, src, dst, traffic_type, path):
+	def __init__(self, flow_id, src, dst, traffic_type, priority, primary_path, backup_path=None):
 		self.id = flow_id
 		self.src = src
 		self.dst = dst
 		self.type = traffic_type
-		self.path = path
+		self.priority = priority
+		self.primary_path = primary_path
+		self.backup_path = backup_path
 
-	def table_entries(self):
+	def table_entries(self, use_backup=False):
 		"""Generate flow table entries"""
+		path = self.backup_path if use_backup and self.backup_path else self.primary_path
 		entries = []
-		for i in range(len(self.path) - 1):
-			node = self.path[i]
-			out_port = self.path[i + 1]
-			match = f"src={self.src}, dst={self.dst}, type={self.type}"
-			entries.append((node, match, out_port))
+		for i in range(len(path) - 1):
+			switch = path[i]
+			out_port = path[i + 1]
+			match = f"src={self.src}, dst={self.dst}, type={self.type}, priority={self.priority}"
+			entries.append((switch, match, out_port))
 		return entries
 
 
@@ -70,38 +76,45 @@ class Topology:
 					seen.add((u, v))
 		return out
 	
-	def shortest_path(self, src, dst):
-		if src not in self.adj or dst not in self.adj:
-			return None
+	def _dijkstra(self, src):
 		dist = {src: 0}
-		prev = {}
 		heap = [(0, src)]
 		while heap:
 			d, u = heapq.heappop(heap)
-			if u == dst:
-				break
 			if d > dist[u]:
 				continue
 			for v, w in self.adj[u].items():
 				nd = d + w
 				if v not in dist or nd < dist[v]:
 					dist[v] = nd
-					prev[v] = u
 					heapq.heappush(heap, (nd, v))
-		if dst not in dist:
-			return None
-		path = []
-		node = dst
-		while node != src:
-			path.append(node)
-			node = prev[node]
-		path.append(src)
-		path.reverse()
-		return path
+		return dist
 	
-
-topo = Topology() # Global topology
-
+	def all_shortest_paths(self, src, dst):
+		if src not in self.adj or dst not in self.adj:
+			return []
+		dist_src = self._dijkstra(src)
+		dist_dst = self._dijkstra(dst)
+		if dst not in dist_src:
+			return []
+		target = dist_src[dst]
+		paths = []
+		def dfs(u, path):
+			if u == dst:
+				paths.append(path.copy())
+				return
+			for v, w in self.adj[u].items():
+				if v not in path and dist_src[u] + w + dist_dst.get(v, float('inf')) == target:
+						path.append(v)
+						dfs(v, path)
+						path.pop()
+		dfs(src, [src])
+		return paths
+	
+	def shortest_path(self, src, dst):
+		paths = self.all_shortest_paths(src, dst)
+		return paths[0] if paths else None
+	
 
 # CLI commands
 
@@ -123,28 +136,61 @@ def remove_link(args):
 
 def inject_flow(args):
 	global _next_flow_id
-	path = topo.shortest_path(args.src, args.dst)
-	if not path:
+	paths = topo.all_shortest_paths(args.src, args.dst)
+	if not paths:
 		print(f'No path found from {args.src} to {args.dst}')
 		return
-	flow_id = _next_flow_id
+	# Round-robin load balancing
+	index = _rr_counters[(args.src, args.dst)] % len(paths)
+	_rr_counters[(args.src, args.dst)] += 1
+	primary = paths[index]
+	# Backup path for critical flows
+	backup = None
+	if args.critical:
+		# Remove strongest edges
+		removed = []
+		for u, v in zip(primary, primary[1:]):
+			if v in topo.adj[u]:
+				removed.append((u, v, topo.adj[u][v]))
+			topo.remove_link(u, v)
+		backup_paths = topo.all_shortest_paths(args.src, args.dst)
+		backup = backup_paths[0] if backup_paths else None
+		# Restore edges
+		for u, v, w in removed:
+			topo.add_link(u, v, w)
+		if backup:
+			print(f"Backup path found: {backup}")
+	flow = Flow(_next_flow_id, args.src, args.dst, args.type, args.priority, primary, backup)
 	_next_flow_id += 1
-	flow = Flow(flow_id, args.src, args.dst, args.type, path)
 	flows.append(flow)
-	print(f'Injecting flow {flow_id}: {flow.src} -> {flow.dst} on path {flow.path}')
+	# Display flow table entries
+	print(f'Injecting flow {flow.id}: {flow.src} -> {flow.dst} on path {flow.primary_path}')
 	for switch, match, out_port in flow.table_entries():
 		print(f'  Switch {switch}: match [{match}] -> out_port={out_port}')
 
 def fail_link(args):
 	topo.remove_link(args.node1, args.node2)
 	print(f'Link failed: {args.node1} <-> {args.node2}')
+	# reroute flows
+	for flow in flows:
+		if any((flow.primary_path[i], flow.primary_path[i+1]) == (args.node1, args.node2) or (flow.primary_path[i], flow.primary_path[i+1]) == (args.node2, args.node1) for i in range(len(flow.primary_path) - 1)):
+			if flow.backup_path:
+				print(f'Rerouting flow {flow.id} from {flow.primary_path} to backup path {flow.backup_path}')
+				# Update flow table entries
+				for switch, match, out_port in flow.table_entries(use_backup=True):
+					print(f'  Switch {switch}: match [{match}] -> out_port={out_port}')
+			else:
+				new_path = topo.shortest_path(flow.src, flow.dst)
+				print(f'Rerouting flow {flow.id} from {flow.primary_path} to new path {new_path}')
+				for switch, match, out_port in Flow(flow.id, flow.src, flow.dst, flow.type, flow.priority, new_path).table_entries():
+					print(f'  Switch {switch}: match [{match}] -> out_port={out_port}')
 
 def show_topo(args):
 	print('Nodes: ', topo.nodes())
 	print('Links: ', topo.links())
 
 def show_route(args):
-	path = topo.shortest_path(args.src, args.dst)
+	path = topo.all_shortest_paths(args.src, args.dst)
 	if path:
 		print(f'Route: {path}')
 	else:
@@ -209,6 +255,8 @@ def main():
 	p.add_argument('--src', required=True, help='Source node ID')
 	p.add_argument('--dst', required=True, help='Destination node ID')
 	p.add_argument('--type', default='default', help='Type of traffic')
+	p.add_argument('--priority', type=int, default=0, help='Priority of the flow')
+	p.add_argument('--critical', action='store_true', help='Enable backup path')
 	p.set_defaults(func=inject_flow)
 
 	# Fail link
